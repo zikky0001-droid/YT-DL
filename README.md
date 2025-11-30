@@ -19,6 +19,6 @@ This backend receives YouTube links and sends the downloaded media to a Telegram
 ### 1. Clone the repo
 
 ```bash
-git clone https://github.com/zikky0001-droid/ytdl-backend.git
-cd ytdl-backend
+git clone https://github.com/zikky0001-droid/YT-DL.git
+cd YT-DL
 *NOT FULLY FUNCTIONAL*🥺🥺🥲
