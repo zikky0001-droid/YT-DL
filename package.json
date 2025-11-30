@@ -1,0 +1,18 @@
+
+{
+  "name": "ytdl-market-api",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "YouTube downloader backend using prod.api.market for Telegram bots",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2",
+    "dotenv": "^16.4.5",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.1.1"
+  }
+}
