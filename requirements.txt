@@ -1,4 +1,3 @@
-fastapi
-uvicorn[standard]
-httpx
+flask
+yt-dlp
 gunicorn
