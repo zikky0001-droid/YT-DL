@@ -1,24 +1,24 @@
-# 🎬 YouTube Downloader API (FastAPI)
+# YT-DL (Render + Flask + yt-dlp)
 
-This backend receives YouTube links and sends the downloaded media to a Telegram chat using the Telegram Bot API. It uses the Market API to fetch media info and supports both direct URL sending and fallback file uploads.
+Backend service for Telegram /ytdl command. Receives a YouTube URL via POST, downloads with yt-dlp, and streams the file back.
 
----
+## Endpoints
+- POST /ytdl
+  - Headers: `X-BOT-TOKEN: <secret>`
+  - JSON: `{ "url": "https://youtube.com/...", "quality": "best|18|bestaudio" }`
+- GET /health
 
-## 🚀 Features
+## Environment variables
+- `BOT_TOKEN`: Secret to authenticate requests from your Telegram bot.
 
-- Accepts POST requests with YouTube links
-- Calls Market API to get downloadable media
-- Sends media to Telegram via remote URL or file upload
-- Cleans up temp files after upload
-- Built with FastAPI + httpx
+## Deployment on Render
+1. Push this repo to GitHub.
+2. Create a Web Service from this repo in Render.
+3. Build command: `pip install -r requirements.txt`
+4. Start command: `gunicorn main:app`
+5. Add environment variable `BOT_TOKEN`.
 
----
-
-## 🛠 Setup
-
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/zikky0001-droid/YT-DL.git
-cd YT-DL
-*NOT FULLY FUNCTIONAL*🥺🥺🥲
+## Notes
+- Use `quality: "18"` for MP4 360p to help stay under Telegram's 2 GB limit.
+- For audio-only, use `quality: "bestaudio"`.
+- Consider returning a cloud link for very large files instead of streaming.
