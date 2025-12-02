@@ -84,7 +84,7 @@ class ProgressNotifier:
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received /start from user %s", update.effective_user.id)
     await update.message.reply_text(
-        "👋 Wassup 😁, Dear User!!! I’m your newly crafted YouTube downloader bot.\n\n"
+        "👋 Wassup 😁, Dear User!!! I'm your newly crafted YouTube downloader bot.\n\n"
         "*To Use Me, below are some of my fresh commands:*\n"
         "• /help — See commands\n"
         "• /profile — Your info\n"
@@ -180,7 +180,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data == "go_start":
         await query.edit_message_text(
-            "👋 Hey! I’m your YouTube downloader bot.\n\n"
+            "👋 Hey! I'm your YouTube downloader bot.\n\n"
             "Use:\n"
             "• /help — See commands\n"
             "• /profile — Your info\n"
@@ -188,9 +188,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 def main():
+    # Debug logging - Option 4
+    logger.info("=== Bot Startup Debug Info ===")
+    logger.info("Bot token exists: %s", bool(BOT_TOKEN))
+    
     if not BOT_TOKEN:
+        logger.error("CRITICAL: TELEGRAM_BOT_TOKEN environment variable is not set!")
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN env var")
-
+    
+    logger.info("Starting bot initialization...")
+    
     # Build bot
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     application.add_handler(CommandHandler("start", start_cmd))
@@ -198,15 +205,68 @@ def main():
     application.add_handler(CommandHandler("profile", profile_cmd))
     application.add_handler(CommandHandler("ytdl", ytdl_cmd))
     application.add_handler(CallbackQueryHandler(button_handler))
-
-    # Run bot polling in background
+    
+    # Test if bot can get info - Option 4 debugging
+    async def test_bot():
+        try:
+            logger.info("Testing bot connection to Telegram API...")
+            bot_info = await application.bot.get_me()
+            logger.info("✅ Bot info retrieved successfully!")
+            logger.info("Bot username: @%s", bot_info.username)
+            logger.info("Bot ID: %s", bot_info.id)
+            logger.info("Bot name: %s", bot_info.full_name)
+        except Exception as e:
+            logger.error("❌ Failed to get bot info: %s", e)
+            logger.error("This usually means:")
+            logger.error("1. Invalid bot token")
+            logger.error("2. Network/connectivity issue")
+            logger.error("3. Telegram API is down")
+    
+    # Run Flask in background thread for health checks - Option 3
+    def run_flask():
+        port = int(os.environ.get("PORT", 10000))
+        logger.info("Starting Flask web server on port %s", port)
+        # Disable Flask debug output to reduce logs
+        logging.getLogger('werkzeug').setLevel(logging.WARNING)
+        app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    
+    # Run bot test in a thread
     import threading
-    threading.Thread(target=lambda: application.run_polling(), daemon=True).start()
-
-    # Run Flask on Render’s assigned port
-    port = int(os.environ.get("PORT", 10000))
-    logger.info("Starting Flask web server on port %s", port)
-    app.run(host="0.0.0.0", port=port)
+    def run_bot_test():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(test_bot())
+        loop.close()
+    
+    # Start Flask in background thread
+    logger.info("Starting Flask in background thread...")
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Run bot test
+    logger.info("Running bot connection test...")
+    test_thread = threading.Thread(target=run_bot_test)
+    test_thread.start()
+    test_thread.join(timeout=10)  # Wait for test to complete
+    
+    if test_thread.is_alive():
+        logger.warning("Bot test timed out after 10 seconds")
+    
+    # Run bot polling in main thread - Option 3
+    logger.info("Starting bot polling...")
+    logger.info("Bot should now be responding to commands!")
+    
+    try:
+        application.run_polling(
+            allowed_updates=Update.ALL_TYPES, 
+            drop_pending_updates=True,
+            close_loop=False
+        )
+    except KeyboardInterrupt:
+        logger.info("Bot stopped by user")
+    except Exception as e:
+        logger.error("Fatal error in bot polling: %s", e)
+        raise
 
 if __name__ == "__main__":
     main()
