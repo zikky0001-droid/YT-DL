@@ -1,14 +1,6 @@
 import os
-import re
-import time
-import tempfile
 import logging
-from contextlib import suppress
-
 from flask import Flask, request, jsonify
-from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, TypeHandler
 
 # Configure logging
 logging.basicConfig(
@@ -19,192 +11,125 @@ logger = logging.getLogger(__name__)
 
 # Environment Variables
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL", "https://yt-dl-01v8.onrender.com")
 
 # Flask app
 app = Flask(__name__)
 
-# Initialize bot application ONCE
-application = Application.builder().token(BOT_TOKEN).build()
+# Store bot state
+import telegram
+from telegram.ext import Application, CommandHandler, MessageHandler, filters
+import asyncio
+import threading
 
-# ==================== BOT COMMANDS ====================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Wassup 😁, Dear User!!! I'm your YouTube downloader bot.\n\n"
-        "*Commands:*\n"
-        "• /help — See commands\n"
-        "• /profile — Your info\n"
-        "• /ytdl <YouTube link> — Download video (360p MP4)"
-    )
+bot = telegram.Bot(token=BOT_TOKEN)
+application = None
 
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="go_start")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "📖 *Commands:*\n• /start — Welcome\n• /help — This menu\n• /profile — Your info\n• /ytdl <link> — Download",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=reply_markup
-    )
+# ==================== BOT HANDLERS ====================
+async def start(update, context):
+    await update.message.reply_text("✅ Bot is working! /help for commands")
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    await update.message.reply_text(
-        f"👤 *Your Profile:*\n"
-        f"Name: {user.full_name}\n"
-        f"Username: @{user.username if user.username else 'N/A'}\n"
-        f"ID: {user.id}",
-        parse_mode=ParseMode.MARKDOWN
-    )
+async def help_cmd(update, context):
+    await update.message.reply_text("Help: /start, /help, /ping")
 
-# YouTube URL regex
-YOUTUBE_REGEX = re.compile(
-    r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'
-    r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
-)
+async def ping(update, context):
+    await update.message.reply_text("🏓 Pong!")
 
-async def ytdl(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        import yt_dlp
-    except ImportError:
-        await update.message.reply_text("❌ yt-dlp not available")
-        return
-    
-    if not context.args:
-        await update.message.reply_text("Usage: /ytdl <YouTube URL>")
-        return
-    
-    url = context.args[0]
-    if not YOUTUBE_REGEX.search(url):
-        await update.message.reply_text("❌ Invalid YouTube URL")
-        return
-    
-    msg = await update.message.reply_text("⏳ Starting download...")
-    
-    try:
-        # Simple download with yt-dlp
-        ydl_opts = {
-            'format': 'best[height<=360]/worst',
-            'outtmpl': '%(title)s.%(ext)s',
-            'quiet': True,
-        }
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ydl_opts['outtmpl'] = os.path.join(tmpdir, '%(title)s.%(ext)s')
-            
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                
-                # Update status
-                await msg.edit_text("📤 Uploading to Telegram...")
-                
-                # Send video
-                with open(filename, 'rb') as video_file:
-                    await update.message.reply_video(
-                        video=InputFile(video_file),
-                        caption=f"✅ {info.get('title', 'Video')}",
-                        supports_streaming=True
-                    )
-                    
-                await msg.edit_text("✅ Download complete!")
-                
-    except Exception as e:
-        logger.error(f"Download error: {e}")
-        await msg.edit_text(f"❌ Error: {str(e)[:100]}")
+async def handle_message(update, context):
+    await update.message.reply_text(f"Echo: {update.message.text}")
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "go_start":
-        await query.edit_message_text("Back to start! Use /help for commands")
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def error_handler(update, context):
     logger.error(f"Update {update} caused error {context.error}")
 
 # ==================== FLASK ROUTES ====================
 @app.route("/")
 def home():
-    return "Telegram Bot is running! ✅"
+    return "Bot is running! ✅ Use /set_webhook to activate."
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "healthy",
-        "bot": "ready",
-        "timestamp": time.time()
-    })
+    return jsonify({"status": "healthy", "bot_token_set": bool(BOT_TOKEN)})
 
 @app.route("/set_webhook", methods=["GET"])
-def set_webhook():
-    """Set webhook manually - Render Free Tier compatible"""
+def set_webhook_endpoint():
+    """Manually set webhook"""
     try:
-        # Set webhook synchronously
-        application.bot.set_webhook(
-            url=f"{RENDER_EXTERNAL_URL}/webhook",
-            allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True
+        webhook_url = f"https://yt-dl-01v8.onrender.com/webhook"
+        
+        # Delete old webhook first
+        bot.delete_webhook()
+        
+        # Set new webhook
+        bot.set_webhook(
+            url=webhook_url,
+            allowed_updates=["message", "callback_query"]
         )
+        
+        # Verify
+        info = bot.get_webhook_info()
         
         return jsonify({
             "success": True,
-            "webhook_url": f"{RENDER_EXTERNAL_URL}/webhook",
-            "message": "Webhook set successfully"
+            "webhook_url": webhook_url,
+            "webhook_info": {
+                "url": info.url,
+                "pending_updates": info.pending_update_count
+            },
+            "message": "Webhook set successfully! Test with /start in Telegram."
         })
     except Exception as e:
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        logger.error(f"Webhook error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     """Handle Telegram updates"""
     try:
-        # Process update
-        update = Update.de_json(request.get_json(), application.bot)
-        application.update_queue.put_nowait(update)
-        return jsonify({"status": "ok"})
+        if request.is_json:
+            update = telegram.Update.de_json(request.get_json(), bot)
+            
+            # Initialize application if not done
+            global application
+            if not application:
+                application = Application.builder().token(BOT_TOKEN).build()
+                application.add_handler(CommandHandler("start", start))
+                application.add_handler(CommandHandler("help", help_cmd))
+                application.add_handler(CommandHandler("ping", ping))
+                application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+                application.add_error_handler(error_handler)
+                application.initialize()
+                logger.info("Bot application initialized")
+            
+            # Process update
+            application.process_update(update)
+            
+            return jsonify({"status": "ok"})
+        return jsonify({"error": "Invalid content"}), 400
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"Webhook processing error: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/delete_webhook", methods=["GET"])
-def delete_webhook():
-    """Delete webhook"""
+@app.route("/get_webhook_info", methods=["GET"])
+def get_webhook_info():
+    """Check webhook status"""
     try:
-        application.bot.delete_webhook()
-        return jsonify({"success": True, "message": "Webhook deleted"})
+        info = bot.get_webhook_info()
+        return jsonify({
+            "url": info.url,
+            "pending_updates": info.pending_update_count,
+            "has_custom_certificate": info.has_custom_certificate,
+            "last_error_date": info.last_error_date,
+            "last_error_message": info.last_error_message
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # ==================== MAIN ====================
-def main():
-    """Initialize bot handlers"""
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_cmd))
-    application.add_handler(CommandHandler("profile", profile))
-    application.add_handler(CommandHandler("ytdl", ytdl))
-    application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_error_handler(error_handler)
-    
-    # Initialize (but don't start polling)
-    application.initialize()
-    
-    logger.info("✅ Bot initialized successfully")
-    logger.info(f"🌐 Webhook URL: {RENDER_EXTERNAL_URL}/webhook")
-    logger.info(f"🔗 Set webhook: {RENDER_EXTERNAL_URL}/set_webhook")
-
-# Run initialization
 if __name__ == "__main__":
-    # Validate token
     if not BOT_TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN environment variable is required")
+        raise ValueError("❌ TELEGRAM_BOT_TOKEN not set!")
     
-    # Initialize bot
-    main()
+    logger.info(f"Starting bot with token: {BOT_TOKEN[:10]}...")
     
-    # Run Flask
     port = int(os.environ.get("PORT", 10000))
-    logger.info(f"🚀 Starting Flask on port {port}")
+    logger.info(f"Server starting on port {port}")
     app.run(host="0.0.0.0", port=port, debug=False)
