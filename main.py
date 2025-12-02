@@ -3,7 +3,6 @@ import re
 import asyncio
 import time
 import tempfile
-import threading
 import logging
 from contextlib import suppress
 
@@ -26,7 +25,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Telegram YTDL Bot is running!"
+    return "Telegram YTDL Bot ✅ is running smoothly 🎉🎉🎉!"
 
 # Regex for YouTube links
 YOUTUBE_URL_RE = re.compile(
@@ -85,8 +84,8 @@ class ProgressNotifier:
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Received /start from user %s", update.effective_user.id)
     await update.message.reply_text(
-        "👋 Hey! I’m your YouTube downloader bot.\n\n"
-        "Use:\n"
+        "👋 Wassup 😁, Dear User!!! I’m your newly crafted YouTube downloader bot.\n\n"
+        "*To Use Me, below are some of my fresh commands:*\n"
         "• /help — See commands\n"
         "• /profile — Your info\n"
         "• /ytdl <YouTube link> — Download video (360p MP4)"
@@ -99,10 +98,10 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     help_text = (
         "📖 *Available Commands:*\n\n"
-        "• /start — Welcome message\n"
-        "• /help — Show this help menu\n"
-        "• /profile — Your Telegram details\n"
-        "• /ytdl <YouTube link> — Download YouTube video\n\n"
+        "• /start — Welcome message 💬\n"
+        "• /help — Show this help menu ⚡\n"
+        "• /profile — Your Telegram details 🚀\n"
+        "• /ytdl <YouTube link> — Download YouTube video 🥂\n\n"
         "Tap the button below to return to the start message."
     )
     await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
@@ -158,7 +157,7 @@ async def ytdl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await notifier.update("Upload to Telegram…")
         elapsed = int(time.time() - start_time)
-        caption = f"✅ Done in {elapsed}s\nTitle: {progress_state['title']}"
+        caption = f"✅ Task Completed In {elapsed}s\nTitle: {progress_state['title']}"
 
         with open(filename, "rb") as f:
             try:
@@ -188,19 +187,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• /ytdl <YouTube link> — Download video (360p MP4)"
         )
 
-def run_bot():
-    app_builder = ApplicationBuilder().token(BOT_TOKEN).build()
-    app_builder.add_handler(CommandHandler("start", start_cmd))
-    app_builder.add_handler(CommandHandler("help", help_cmd))
-    app_builder.add_handler(CommandHandler("profile", profile_cmd))
-    app_builder.add_handler(CommandHandler("ytdl", ytdl_cmd))
-    app_builder.add_handler(CallbackQueryHandler(button_handler))
-    logger.info("Bot started polling…")
-    app_builder.run_polling()
-
-if __name__ == "__main__":
+def main():
     if not BOT_TOKEN:
         raise RuntimeError("Missing TELEGRAM_BOT_TOKEN env var")
-    threading.Thread(target=run_bot, daemon=True).start()
-    logger.info("Starting Flask web server for Render health check…")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+
+    # Build bot
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start_cmd))
+    application.add_handler(CommandHandler("help", help_cmd))
+    application.add_handler(CommandHandler("profile", profile_cmd))
+    application.add_handler(CommandHandler("ytdl", ytdl_cmd))
+    application.add_handler(CallbackQueryHandler(button_handler))
+
+    # Run bot polling in background
+    import threading
+    threading.Thread(target=lambda: application.run_polling(), daemon=True).start()
+
+    # Run Flask on Render’s assigned port
+    port = int(os.environ.get("PORT", 10000))
+    logger.info("Starting Flask web server on port %s", port)
+    app.run(host="0.0.0.0", port=port)
+
+if __name__ == "__main__":
+    main()
