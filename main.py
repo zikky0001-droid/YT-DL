@@ -1,4 +1,4 @@
-import os, tempfile, subprocess, base64, sys, json, time, re
+import os, tempfile, subprocess, sys, json, time, re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
@@ -6,22 +6,30 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 yt_regex = re.compile(r'(?:https?:\/\/)?(?:www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9\-_]+)')
 
+# /start command
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Welcome to the YouTube Downloader Bot!\n\n"
-        "Send me a valid YouTube link and I'll fetch the video for you.\n\n"
-        "⚠️ Limits:\n• Max duration: 5 minutes\n• Max size: 50 MB"
+        "Use the command:\n\n"
+        "<code>/ytdl [YouTube link]</code>\n\n"
+        "to download YouTube videos directly here.\n\n"
+        "⚠️ Limits:\n• Max duration: 5 minutes\n• Max size: 50 MB",
+        parse_mode="HTML"
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip() if update.message and update.message.text else ""
-    if not yt_regex.search(text):
-        await update.message.reply_text("❌ Please send a valid YouTube link.")
+# /ytdl command
+async def ytdl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("❌ Please provide a YouTube link.\nExample: /ytdl https://youtu.be/dQw4w9WgXcQ")
         return
 
-    url = yt_regex.search(text).group(0)
-    quality = "18"  # default 360p
+    url = args[0]
+    if not yt_regex.search(url):
+        await update.message.reply_text("❌ Invalid YouTube URL.")
+        return
 
+    quality = "18"  # default 360p
     await update.message.reply_text("⏳ Downloading... Please wait.")
 
     try:
@@ -71,7 +79,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Step 3: Send file to Telegram
     try:
         await update.message.reply_document(document=open(output_path, "rb"))
-        await update.message.reply_text("✅ Download complete! Your file is ready.")
+        await update.message.reply_text("✅ Download complete! Your video is ready 🎬")
     except Exception as e:
         print(f"[YT-DL] Sending file failed: {e}", flush=True)
         await update.message.reply_text("❌ Failed to send file.")
@@ -84,7 +92,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CommandHandler("ytdl", ytdl))
 
     print("[YT-DL] Bot is running...", flush=True)
     app.run_polling()
