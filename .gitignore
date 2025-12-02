@@ -1,6 +1,28 @@
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Logs
 *.log
-.env
+
+# Temporary files
+*.tmp
+*.swp
+*.swo
 tmp/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# Render build artifacts
+*.tar.gz
