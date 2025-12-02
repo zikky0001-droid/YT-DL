@@ -1,101 +1,206 @@
-import os, tempfile, subprocess, sys, json, time, re
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import os
+import re
+import asyncio
+import time
+import tempfile
+import threading
+import logging
+from contextlib import suppress
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+from flask import Flask
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.constants import ParseMode
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, CallbackQueryHandler
 
-yt_regex = re.compile(r'(?:https?:\/\/)?(?:www\.)?(youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9\-_]+)')
+# Configure logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-# /start command
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Flask app for Render health check
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Telegram YTDL Bot is running!"
+
+# Regex for YouTube links
+YOUTUBE_URL_RE = re.compile(
+    r"^(https?://)?(www\.)?"
+    r"(youtube\.com/(watch\?v=[\w-]+|shorts/[\w-]+|live/[\w-]+)|youtu\.be/[\w-]+)"
+    r"([&?][^\s]+)?$",
+    re.IGNORECASE,
+)
+
+DEFAULT_YTDLP_OPTS = {
+    "format": "best[ext=mp4][height<=360]/best[height<=360]",
+    "noplaylist": True,
+    "quiet": True,
+    "no_warnings": True,
+    "restrictfilenames": True,
+    "outtmpl": "%(title).80s.%(ext)s",
+}
+
+# Utility
+def human_bytes(n: float) -> str:
+    if n is None:
+        return "unknown"
+    units = ["B", "KB", "MB", "GB"]
+    i = 0
+    while n >= 1024 and i < len(units) - 1:
+        n /= 1024.0
+        i += 1
+    return f"{n:.1f} {units[i]}"
+
+class ProgressNotifier:
+    def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+        self.context = context
+        self.chat_id = chat_id
+        self.message_id = message_id
+        self.last_edit = 0
+        self.last_text = None
+
+    async def update(self, text: str, min_interval: float = 0.8):
+        now = time.time()
+        if self.last_text == text and (now - self.last_edit) < min_interval:
+            return
+        if (now - self.last_edit) < min_interval:
+            return
+        with suppress(Exception):
+            await self.context.bot.edit_message_text(
+                chat_id=self.chat_id,
+                message_id=self.message_id,
+                text=text,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+            )
+            self.last_edit = now
+            self.last_text = text
+
+# Commands
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received /start from user %s", update.effective_user.id)
     await update.message.reply_text(
-        "👋 Welcome to the YouTube Downloader Bot!\n\n"
-        "Use the command:\n\n"
-        "<code>/ytdl [YouTube link]</code>\n\n"
-        "to download YouTube videos directly here.\n\n"
-        "⚠️ Limits:\n• Max duration: 5 minutes\n• Max size: 50 MB",
-        parse_mode="HTML"
+        "👋 Hey! I’m your YouTube downloader bot.\n\n"
+        "Use:\n"
+        "• /help — See commands\n"
+        "• /profile — Your info\n"
+        "• /ytdl <YouTube link> — Download video (360p MP4)"
     )
 
-# /ytdl command
-async def ytdl(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.info("Received /help from user %s", update.effective_user.id)
+    keyboard = [[InlineKeyboardButton("⬅️ Back to Start", callback_data="go_start")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    help_text = (
+        "📖 *Available Commands:*\n\n"
+        "• /start — Welcome message\n"
+        "• /help — Show this help menu\n"
+        "• /profile — Your Telegram details\n"
+        "• /ytdl <YouTube link> — Download YouTube video\n\n"
+        "Tap the button below to return to the start message."
+    )
+    await update.message.reply_text(help_text, parse_mode=ParseMode.MARKDOWN, reply_markup=reply_markup)
+
+async def profile_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    logger.info("Received /profile from user %s", user.id)
+    lines = [
+        f"Name: {user.full_name}",
+        f"Username: @{user.username}" if user.username else "Username: (none)",
+        f"ID: {user.id}",
+        f"Language: {user.language_code or 'unknown'}",
+        f"Is bot: {user.is_bot}",
+    ]
+    await update.message.reply_text("\n".join(lines))
+
+async def ytdl_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from yt_dlp import YoutubeDL
     args = context.args
     if not args:
-        await update.message.reply_text("❌ Please provide a YouTube link.\nExample: /ytdl https://youtu.be/dQw4w9WgXcQ")
+        await update.message.reply_text("Usage: /ytdl <YouTube link>")
+        return
+    url = args[0].strip()
+    if not YOUTUBE_URL_RE.match(url):
+        await update.message.reply_text("Invalid YouTube link.")
         return
 
-    url = args[0]
-    if not yt_regex.search(url):
-        await update.message.reply_text("❌ Invalid YouTube URL.")
-        return
+    logger.info("Starting download for URL: %s (user %s)", url, update.effective_user.id)
+    status_msg = await update.message.reply_text("Preparing download…")
+    notifier = ProgressNotifier(context, status_msg.chat_id, status_msg.message_id)
+    start_time = time.time()
+    tmpdir = tempfile.TemporaryDirectory()
 
-    quality = "18"  # default 360p
-    await update.message.reply_text("⏳ Downloading... Please wait.")
+    progress_state = {"title": None, "filename": None}
+
+    def hook(d):
+        if d["status"] == "downloading":
+            progress_state["filename"] = d.get("filename")
+            asyncio.create_task(notifier.update("Downloading…"))
+        elif d["status"] == "finished":
+            asyncio.create_task(notifier.update("Finalizing…"))
+
+    ydl_opts = dict(DEFAULT_YTDLP_OPTS)
+    ydl_opts["progress_hooks"] = [hook]
+    ydl_opts["paths"] = {"home": tmpdir.name}
 
     try:
-        # Step 1: Metadata check
-        result = subprocess.run(
-            ["yt-dlp", "--print-json", "-f", quality, url],
-            capture_output=True, text=True, check=True
+        loop = asyncio.get_running_loop()
+        with YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
+            filename = ydl.prepare_filename(info)
+            progress_state["title"] = info.get("title")
+
+        await notifier.update("Upload to Telegram…")
+        elapsed = int(time.time() - start_time)
+        caption = f"✅ Done in {elapsed}s\nTitle: {progress_state['title']}"
+
+        with open(filename, "rb") as f:
+            try:
+                await update.message.reply_video(video=InputFile(f), caption=caption, supports_streaming=True)
+                logger.info("Video sent successfully to user %s", update.effective_user.id)
+            except Exception as e:
+                logger.warning("Video send failed, fallback to document. Error: %s", e)
+                f.seek(0)
+                await update.message.reply_document(document=InputFile(f), caption=caption)
+
+    except Exception as e:
+        logger.error("Download failed for URL %s: %s", url, e)
+        await notifier.update(f"Error: {str(e)[:200]}")
+    finally:
+        tmpdir.cleanup()
+
+# Inline button callback
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "go_start":
+        await query.edit_message_text(
+            "👋 Hey! I’m your YouTube downloader bot.\n\n"
+            "Use:\n"
+            "• /help — See commands\n"
+            "• /profile — Your info\n"
+            "• /ytdl <YouTube link> — Download video (360p MP4)"
         )
-        info = json.loads(result.stdout.splitlines()[0])
-        duration = info.get("duration", 0)
-        filesize = info.get("filesize", 0) or info.get("filesize_approx", 0)
 
-        print(f"[YT-DL] Duration: {duration}s, Size: {filesize} bytes", flush=True)
-
-        if duration > 300 or (filesize and filesize > 50 * 1024 * 1024):
-            await update.message.reply_text("❌ File too long for the bot to execute.")
-            return
-
-    except Exception as e:
-        print(f"[YT-DL] Metadata check failed: {e}", flush=True)
-        time.sleep(20)
-        await update.message.reply_text("❌ Unable to process URL.")
-        return
-
-    # Step 2: Download
-    tmpdir = tempfile.mkdtemp()
-    output_template = os.path.join(tmpdir, "%(title)s.%(ext)s")
-    cmd = ["yt-dlp", "-o", output_template, "-f", quality, url]
-
-    print(f"[YT-DL] Starting download...", flush=True)
-    try:
-        subprocess.check_call(cmd)
-    except subprocess.CalledProcessError as e:
-        print(f"[YT-DL] Download failed: {e}", flush=True)
-        time.sleep(20)
-        await update.message.reply_text("❌ Download failed.")
-        return
-
-    files = [os.path.join(tmpdir, f) for f in os.listdir(tmpdir)]
-    if not files:
-        await update.message.reply_text("❌ No output file found.")
-        return
-
-    output_path = files[0]
-    print(f"[YT-DL] Download complete: {output_path}", flush=True)
-
-    # Step 3: Send file to Telegram
-    try:
-        await update.message.reply_document(document=open(output_path, "rb"))
-        await update.message.reply_text("✅ Download complete! Your video is ready 🎬")
-    except Exception as e:
-        print(f"[YT-DL] Sending file failed: {e}", flush=True)
-        await update.message.reply_text("❌ Failed to send file.")
-
-def main():
-    if not BOT_TOKEN:
-        print("BOT_TOKEN not set in environment", flush=True)
-        return
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("ytdl", ytdl))
-
-    print("[YT-DL] Bot is running...", flush=True)
-    app.run_polling()
+def run_bot():
+    app_builder = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_builder.add_handler(CommandHandler("start", start_cmd))
+    app_builder.add_handler(CommandHandler("help", help_cmd))
+    app_builder.add_handler(CommandHandler("profile", profile_cmd))
+    app_builder.add_handler(CommandHandler("ytdl", ytdl_cmd))
+    app_builder.add_handler(CallbackQueryHandler(button_handler))
+    logger.info("Bot started polling…")
+    app_builder.run_polling()
 
 if __name__ == "__main__":
-    main()
+    if not BOT_TOKEN:
+        raise RuntimeError("Missing TELEGRAM_BOT_TOKEN env var")
+    threading.Thread(target=run_bot, daemon=True).start()
+    logger.info("Starting Flask web server for Render health check…")
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
